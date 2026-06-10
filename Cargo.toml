@@ -1,0 +1,29 @@
+[package]
+name = "plaud"
+version = "0.1.0"
+edition = "2021"
+description = "CLI client for Plaud recordings via the Plaud MCP server"
+license = "MIT"
+repository = "https://github.com/leegonzales/plaud-cli"
+
+[[bin]]
+name = "plaud"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+open = "5"
+directories = "5"
+url = "2"
+
+[profile.release]
+strip = true
+lto = "thin"

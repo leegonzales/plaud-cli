@@ -54,6 +54,12 @@ automatically on a `401`. This file is separate from the official client's
 | `transcript` | `get_transcript`   |
 | `download`   | `get_file` → `presigned_url` |
 
+`download` only works when Plaud has a `presigned_url` for the recording;
+some recordings (e.g. very short clips) don't carry one, and the command
+reports that clearly. `transcript` and `note` decode Plaud's nested
+`data_content` blocks — the verbatim transcript and the AI summary / meeting
+minutes — and fall back to raw JSON for any block shape they don't recognize.
+
 ## Layout
 
 - `oauth.rs` — discovery, DCR, PKCE, loopback redirect, token + refresh

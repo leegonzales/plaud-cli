@@ -107,21 +107,31 @@ async fn list(http: &reqwest::Client, args: ListArgs, json_out: bool) -> Result<
     }
 }
 
-async fn get(http: &reqwest::Client, id: &str, _json_out: bool) -> Result<()> {
+async fn get(http: &reqwest::Client, id: &str, json_out: bool) -> Result<()> {
     let mut mcp = client(http).await?;
-    let payload = mcp.call_tool("get_file", json!({ "id": id })).await?;
-    output::print_pretty(&payload)
+    let payload = mcp.call_tool("get_file", json!({ "file_id": id })).await?;
+    if json_out {
+        output::print_pretty(&payload)
+    } else {
+        output::render_file(&payload)
+    }
 }
 
-async fn note(http: &reqwest::Client, id: &str, _json_out: bool) -> Result<()> {
+async fn note(http: &reqwest::Client, id: &str, json_out: bool) -> Result<()> {
     let mut mcp = client(http).await?;
-    let payload = mcp.call_tool("get_note", json!({ "id": id })).await?;
-    output::print_pretty(&payload)
+    let payload = mcp.call_tool("get_note", json!({ "file_id": id })).await?;
+    if json_out {
+        output::print_pretty(&payload)
+    } else {
+        output::render_note(&payload)
+    }
 }
 
 async fn transcript(http: &reqwest::Client, id: &str, json_out: bool) -> Result<()> {
     let mut mcp = client(http).await?;
-    let payload = mcp.call_tool("get_transcript", json!({ "id": id })).await?;
+    let payload = mcp
+        .call_tool("get_transcript", json!({ "file_id": id }))
+        .await?;
     if json_out {
         output::print_pretty(&payload)
     } else {
@@ -131,7 +141,7 @@ async fn transcript(http: &reqwest::Client, id: &str, json_out: bool) -> Result<
 
 async fn download(http: &reqwest::Client, id: &str, out: Option<std::path::PathBuf>) -> Result<()> {
     let mut mcp = client(http).await?;
-    let file = mcp.call_tool("get_file", json!({ "id": id })).await?;
+    let file = mcp.call_tool("get_file", json!({ "file_id": id })).await?;
     let url = find_presigned_url(&file)
         .ok_or_else(|| anyhow!("no presigned_url in get_file response for {id}"))?;
 

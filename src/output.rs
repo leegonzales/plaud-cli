@@ -21,7 +21,7 @@ pub fn render_list(value: &Value) -> Result<()> {
     }
 
     let (c_id, c_dur, c_created, c_name) = ("ID", "DURATION", "CREATED", "NAME");
-    println!("{c_id:<26}  {c_dur:>9}  {c_created:<19}  {c_name}");
+    println!("{c_id:<32}  {c_dur:>9}  {c_created:<19}  {c_name}");
     for item in items {
         let id = field_str(item, &["id", "file_id", "uuid"]).unwrap_or_else(|| "?".into());
         let name = field_str(item, &["name", "title", "filename"]).unwrap_or_default();
@@ -32,20 +32,36 @@ pub fn render_list(value: &Value) -> Result<()> {
             .and_then(|v| v.as_u64())
             .map(fmt_duration_ms)
             .unwrap_or_else(|| "-".into());
-        println!("{id:<26}  {duration:>9}  {created:<19}  {name}");
+        println!("{id:<32}  {duration:>9}  {created:<19}  {name}");
     }
     Ok(())
 }
 
-/// Render a transcript as `[mm:ss] Speaker: text` lines, falling back to
-/// pretty JSON when the segment shape isn't recognized.
+/// A Plaud `data_content` field is itself a JSON-encoded string; decode it.
+fn parse_data_content(block: &Value) -> Option<Value> {
+    let raw = block.get("data_content")?.as_str()?;
+    serde_json::from_str(raw).ok()
+}
+
+/// Find the first `data_*` block of a given `data_type`.
+fn block_of_type<'a>(blocks: &'a [Value], data_type: &str) -> Option<&'a Value> {
+    blocks
+        .iter()
+        .find(|b| b.get("data_type").and_then(|v| v.as_str()) == Some(data_type))
+}
+
+/// Render a transcript as `[mm:ss] Speaker: text` lines.
+///
+/// `get_transcript` returns an array of typed blocks; the verbatim transcript
+/// lives in the `transaction` block, whose `data_content` is a JSON string of
+/// segments (`content`, `speaker`, `start_time` ms). Falls back to pretty JSON
+/// if that shape isn't present.
 pub fn render_transcript(value: &Value) -> Result<()> {
-    let segments = value.as_array().or_else(|| {
-        ["source_list", "segments", "transcript", "data"]
-            .iter()
-            .find_map(|k| value.get(*k).and_then(|v| v.as_array()))
-    });
-    let Some(segments) = segments else {
+    let Some(blocks) = value.as_array() else {
+        return print_pretty(value);
+    };
+    let segments = block_of_type(blocks, "transaction").and_then(parse_data_content);
+    let Some(Value::Array(segments)) = segments else {
         return print_pretty(value);
     };
     if segments.is_empty() {
@@ -53,31 +69,95 @@ pub fn render_transcript(value: &Value) -> Result<()> {
         return Ok(());
     }
 
-    let mut rendered = false;
-    for seg in segments {
-        let text = field_str(seg, &["text", "content", "transcript"]);
-        let Some(text) = text else { continue };
-        let speaker = field_str(seg, &["speaker", "speaker_name", "role"]);
-        let start_ms = seg
-            .get("start")
-            .or_else(|| seg.get("start_time"))
-            .or_else(|| seg.get("begin"))
-            .and_then(|v| v.as_u64());
-
+    for seg in &segments {
+        let Some(text) = seg.get("content").and_then(|v| v.as_str()) else {
+            continue;
+        };
         let mut line = String::new();
-        if let Some(ms) = start_ms {
+        if let Some(ms) = seg.get("start_time").and_then(|v| v.as_u64()) {
             line.push_str(&format!("[{}] ", fmt_timestamp_ms(ms)));
         }
-        if let Some(sp) = speaker {
-            line.push_str(&format!("{sp}: "));
+        if let Some(sp) = field_str(seg, &["speaker", "original_speaker"]) {
+            if !sp.is_empty() {
+                line.push_str(&format!("{sp}: "));
+            }
         }
-        line.push_str(&text);
+        line.push_str(text);
         println!("{line}");
+    }
+    Ok(())
+}
+
+/// Render notes as Markdown sections. `get_note` returns an array of note
+/// blocks; each block's `data_content` is a JSON string wrapping the Markdown
+/// in `ai_content`. Falls back to pretty JSON if unrecognized.
+pub fn render_note(value: &Value) -> Result<()> {
+    let Some(blocks) = value.as_array() else {
+        return print_pretty(value);
+    };
+    if blocks.is_empty() {
+        println!("(no notes)");
+        return Ok(());
+    }
+
+    let mut rendered = false;
+    for (i, block) in blocks.iter().enumerate() {
+        let header =
+            field_str(block, &["data_tab_name", "data_title"]).unwrap_or_else(|| "Note".into());
+        let body = parse_data_content(block).and_then(|c| {
+            c.get("ai_content")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
+        let Some(body) = body else { continue };
+
+        if i > 0 {
+            println!();
+        }
+        println!("## {header}\n");
+        println!("{body}");
         rendered = true;
     }
 
     if !rendered {
         return print_pretty(value);
+    }
+    Ok(())
+}
+
+/// Render a `get_file` payload as a compact summary.
+pub fn render_file(value: &Value) -> Result<()> {
+    if let Some(name) = field_str(value, &["name"]) {
+        println!("{name}");
+    }
+    if let Some(id) = field_str(value, &["id"]) {
+        println!("  id:        {id}");
+    }
+    if let Some(ms) = value.get("duration").and_then(|v| v.as_u64()) {
+        println!("  duration:  {}", fmt_duration_ms(ms));
+    }
+    if let Some(v) = field_str(value, &["start_at"]) {
+        println!("  recorded:  {v}");
+    }
+    if let Some(v) = field_str(value, &["created_at"]) {
+        println!("  uploaded:  {v}");
+    }
+    if let Some(v) = field_str(value, &["serial_number"]) {
+        println!("  device:    {v}");
+    }
+    let n_src = value
+        .get("source_list")
+        .and_then(|v| v.as_array())
+        .map_or(0, |a| a.len());
+    let n_note = value
+        .get("note_list")
+        .and_then(|v| v.as_array())
+        .map_or(0, |a| a.len());
+    println!("  transcript: {n_src} block(s)");
+    println!("  notes:      {n_note} block(s)");
+    match value.get("presigned_url").and_then(|v| v.as_str()) {
+        Some(u) => println!("  audio:      {u}"),
+        None => println!("  audio:      (not available)"),
     }
     Ok(())
 }

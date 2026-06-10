@@ -15,20 +15,60 @@ cargo build --release   # -> target/release/plaud
 
 ## Usage
 
+### Live reads
+
 ```sh
 plaud login                       # browser OAuth sign-in
 plaud whoami                      # current account
 plaud list                        # recent recordings (table)
 plaud list -q standup --from 2026-06-01 --to 2026-06-10
-plaud list --page 2 --page-size 50
-plaud get <id>                    # full recording detail
-plaud note <id>                   # AI summary / action items / key topics
-plaud transcript <id>             # transcript with timestamps + speakers
+plaud list --page 2 --page-size 50          # page-size >= 10
+plaud get <id>                    # recording summary
+plaud note <id>                   # AI summary / action items / minutes
+plaud transcript <id>             # transcript: [mm:ss] Speaker: text
 plaud download <id> -o talk.mp3   # audio via 24h presigned URL
 plaud logout                      # forget stored tokens
-
-plaud --json list | jq '.[].id'   # raw JSON on any command
 ```
+
+### Local store: sync, search, export
+
+`plaud` keeps a local store of normalized recordings so search is fast and
+offline, and export is cheap. The store lives at `~/.plaud/store/` (override
+with `PLAUD_STORE`).
+
+```sh
+plaud sync                        # pull all recordings into the store
+plaud sync --since-last           # only what's new since the last sync
+plaud sync --since 2026-06-01     # only uploads on/after a date
+plaud sync --limit 20             # cap work this run (newest first)
+
+plaud search "acme retainer"      # full-text over transcripts + notes + titles
+plaud search "acme" --context 2   # ± N transcript segments of context
+
+plaud export --dir ./meetings                 # all synced -> Markdown files
+plaud export <id> <id> --dir ./out            # specific recordings
+plaud export --dir ./out --format json        # one JSON per recording
+```
+
+`export --format md` writes one `YYYY-MM-DD-<slug>.md` per recording, with YAML
+frontmatter, an action-items checklist, the AI notes, and the transcript —
+ready for Obsidian / SecondBrain. Exporting an id that isn't synced fetches it
+live and caches it.
+
+### Output modes (global flags)
+
+```sh
+plaud list --json | jq '.[].id'             # normalized JSON, stable schema
+plaud list --ndjson | jq -r .id             # one record per line (pipelines)
+plaud note <id> --json | jq '.action_items' # action items as a string[]
+plaud transcript <id> --ndjson              # one segment per line
+plaud get <id> --raw                        # unprocessed Plaud payload
+plaud schema                                 # print the stable --json schema
+```
+
+`--json` emits a documented, stable, snake_case schema (see `plaud schema`).
+`--ndjson` emits one element per line. `--raw` dumps the unprocessed Plaud
+payload. Commands exit non-zero on failure.
 
 ## How auth works
 
@@ -64,8 +104,10 @@ minutes — and fall back to raw JSON for any block shape they don't recognize.
 
 - `oauth.rs` — discovery, DCR, PKCE, loopback redirect, token + refresh
 - `mcp.rs` — Streamable-HTTP MCP client (initialize, session id, `tools/call`)
+- `model.rs` — normalize Plaud's nested payloads into one stable `Record`
+- `store.rs` — local sync store (records + cursor)
 - `commands.rs` — one handler per subcommand
-- `output.rs` — table / transcript rendering; `--json` passthrough
+- `output.rs` — human-readable rendering (table, transcript, notes)
 - `config.rs` — token storage
 
 Unofficial; not affiliated with Plaud.

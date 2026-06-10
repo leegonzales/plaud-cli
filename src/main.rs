@@ -4,8 +4,10 @@ mod cli;
 mod commands;
 mod config;
 mod mcp;
+mod model;
 mod oauth;
 mod output;
+mod store;
 
 use clap::Parser;
 

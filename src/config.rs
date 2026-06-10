@@ -88,6 +88,14 @@ pub fn now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Current time as an RFC 3339 / ISO 8601 UTC string.
+pub fn now_iso() -> String {
+    use time::format_description::well_known::Rfc3339;
+    time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default()
+}
+
 #[cfg(unix)]
 fn restrict_permissions(path: &std::path::Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;

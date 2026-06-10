@@ -1,8 +1,10 @@
-//! Rendering helpers. `--json` always emits the raw tool payload (jq-friendly);
-//! otherwise we pretty-print, with a compact table for recording listings.
+//! Human-readable rendering. Structured output (json/ndjson/raw) is built in
+//! `commands` from the `model` types; this module is the `Human` mode.
 
 use anyhow::Result;
 use serde_json::Value;
+
+use crate::model;
 
 /// Pretty-print any JSON value to stdout.
 pub fn print_pretty(value: &Value) -> Result<()> {
@@ -37,90 +39,47 @@ pub fn render_list(value: &Value) -> Result<()> {
     Ok(())
 }
 
-/// A Plaud `data_content` field is itself a JSON-encoded string; decode it.
-fn parse_data_content(block: &Value) -> Option<Value> {
-    let raw = block.get("data_content")?.as_str()?;
-    serde_json::from_str(raw).ok()
-}
-
-/// Find the first `data_*` block of a given `data_type`.
-fn block_of_type<'a>(blocks: &'a [Value], data_type: &str) -> Option<&'a Value> {
-    blocks
-        .iter()
-        .find(|b| b.get("data_type").and_then(|v| v.as_str()) == Some(data_type))
-}
-
-/// Render a transcript as `[mm:ss] Speaker: text` lines.
-///
-/// `get_transcript` returns an array of typed blocks; the verbatim transcript
-/// lives in the `transaction` block, whose `data_content` is a JSON string of
-/// segments (`content`, `speaker`, `start_time` ms). Falls back to pretty JSON
-/// if that shape isn't present.
+/// Render a transcript payload as `[mm:ss] Speaker: text` lines.
 pub fn render_transcript(value: &Value) -> Result<()> {
-    let Some(blocks) = value.as_array() else {
-        return print_pretty(value);
-    };
-    let segments = block_of_type(blocks, "transaction").and_then(parse_data_content);
-    let Some(Value::Array(segments)) = segments else {
-        return print_pretty(value);
-    };
+    let segments = model::segments_from_transcript(value);
     if segments.is_empty() {
-        println!("(empty transcript)");
-        return Ok(());
+        return print_pretty(value); // unrecognized shape — show raw
     }
-
     for seg in &segments {
-        let Some(text) = seg.get("content").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let mut line = String::new();
-        if let Some(ms) = seg.get("start_time").and_then(|v| v.as_u64()) {
-            line.push_str(&format!("[{}] ", fmt_timestamp_ms(ms)));
-        }
-        if let Some(sp) = field_str(seg, &["speaker", "original_speaker"]) {
-            if !sp.is_empty() {
-                line.push_str(&format!("{sp}: "));
-            }
-        }
-        line.push_str(text);
-        println!("{line}");
+        print_segment(seg);
     }
     Ok(())
 }
 
-/// Render notes as Markdown sections. `get_note` returns an array of note
-/// blocks; each block's `data_content` is a JSON string wrapping the Markdown
-/// in `ai_content`. Falls back to pretty JSON if unrecognized.
-pub fn render_note(value: &Value) -> Result<()> {
-    let Some(blocks) = value.as_array() else {
-        return print_pretty(value);
-    };
-    if blocks.is_empty() {
-        println!("(no notes)");
-        return Ok(());
+fn print_segment(seg: &model::Segment) {
+    let mut line = String::new();
+    if let Some(ms) = seg.start_ms {
+        line.push_str(&format!("[{}] ", fmt_timestamp_ms(ms)));
     }
+    if let Some(sp) = &seg.speaker {
+        line.push_str(&format!("{sp}: "));
+    }
+    line.push_str(&seg.text);
+    println!("{line}");
+}
 
-    let mut rendered = false;
-    for (i, block) in blocks.iter().enumerate() {
-        let header =
-            field_str(block, &["data_tab_name", "data_title"]).unwrap_or_else(|| "Note".into());
-        let body = parse_data_content(block).and_then(|c| {
-            c.get("ai_content")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        });
-        let Some(body) = body else { continue };
-
+/// Render notes as Markdown sections, tab name as the heading.
+pub fn render_note(value: &Value) -> Result<()> {
+    let notes = model::notes_from_payload(value);
+    if notes.is_empty() {
+        return print_pretty(value); // unrecognized shape — show raw
+    }
+    for (i, note) in notes.iter().enumerate() {
         if i > 0 {
             println!();
         }
-        println!("## {header}\n");
-        println!("{body}");
-        rendered = true;
-    }
-
-    if !rendered {
-        return print_pretty(value);
+        let header = if note.tab.is_empty() {
+            note.title.clone()
+        } else {
+            note.tab.clone()
+        };
+        println!("## {}\n", if header.is_empty() { "Note" } else { &header });
+        println!("{}", note.markdown);
     }
     Ok(())
 }

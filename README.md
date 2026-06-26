@@ -102,6 +102,16 @@ reports that clearly. `transcript` and `note` decode Plaud's nested
 `data_content` blocks — the verbatim transcript and the AI summary / meeting
 minutes — and fall back to raw JSON for any block shape they don't recognize.
 
+## Agent skill
+
+[`skill/use-plaud/SKILL.md`](skill/use-plaud/SKILL.md) is a ready-made
+[Claude Code](https://claude.com/claude-code) skill that teaches an AI agent how
+to drive this CLI — the commands, the stable `--json`/`--ndjson` contract, the
+sync→search→export flow, and common recipes. Drop it into your agent's skills
+directory (e.g. `~/.claude/skills/use-plaud/`) to let an assistant work your
+recordings for you. It's generic — no personal data, no assumptions about your
+setup.
+
 ## Development
 
 ```sh

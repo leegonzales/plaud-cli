@@ -323,6 +323,11 @@ pub async fn refresh(http: &reqwest::Client, store: &TokenStore) -> Result<Token
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        // An invalid/expired refresh token isn't recoverable here — the user
+        // must re-authenticate. Surface that plainly instead of raw server JSON.
+        if body.contains("invalid_grant") || body.contains("REFRESH_TOKEN_INVALID") {
+            bail!("session expired — run `plaud login` to sign in again");
+        }
         bail!("token refresh failed ({status}): {body}");
     }
     let token: TokenResponse = resp.json().await.context("parsing refresh response")?;

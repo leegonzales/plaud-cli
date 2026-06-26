@@ -42,9 +42,8 @@ impl McpClient {
         let resp = self.post_once(body).await?;
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             // Access token likely expired — refresh, persist, retry once.
-            let refreshed = oauth::refresh(&self.http, &self.store)
-                .await
-                .context("refreshing access token after 401")?;
+            // refresh() already returns actionable errors; don't re-wrap.
+            let refreshed = oauth::refresh(&self.http, &self.store).await?;
             config::save(&refreshed)?;
             self.store = refreshed;
             let retry = self.post_once(body).await?;

@@ -36,17 +36,24 @@ pub enum OutputMode {
     Raw,
 }
 
-impl Cli {
-    pub fn output_mode(&self) -> OutputMode {
-        if self.raw {
+impl OutputMode {
+    /// Resolve flags to a mode. Precedence: raw > ndjson > json > human.
+    pub fn resolve(raw: bool, ndjson: bool, json: bool) -> OutputMode {
+        if raw {
             OutputMode::Raw
-        } else if self.ndjson {
+        } else if ndjson {
             OutputMode::Ndjson
-        } else if self.json {
+        } else if json {
             OutputMode::Json
         } else {
             OutputMode::Human
         }
+    }
+}
+
+impl Cli {
+    pub fn output_mode(&self) -> OutputMode {
+        OutputMode::resolve(self.raw, self.ndjson, self.json)
     }
 }
 
@@ -155,4 +162,26 @@ pub struct ExportArgs {
     pub format: ExportFormat,
     /// Export only these recording ids (default: all synced records).
     pub ids: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn output_mode_precedence() {
+        // raw wins over everything.
+        assert_eq!(OutputMode::resolve(true, true, true), OutputMode::Raw);
+        // ndjson beats json.
+        assert_eq!(OutputMode::resolve(false, true, true), OutputMode::Ndjson);
+        assert_eq!(OutputMode::resolve(false, false, true), OutputMode::Json);
+        assert_eq!(OutputMode::resolve(false, false, false), OutputMode::Human);
+    }
+
+    #[test]
+    fn cli_definition_is_valid() {
+        // Catches clap config errors (duplicate args, bad defaults) at test time.
+        Cli::command().debug_assert();
+    }
 }

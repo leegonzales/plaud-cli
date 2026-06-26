@@ -11,7 +11,7 @@ use crate::cli::{
 };
 use crate::config;
 use crate::mcp::McpClient;
-use crate::model;
+use crate::model::{self, Record};
 use crate::oauth;
 use crate::output;
 use crate::store;
@@ -50,9 +50,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 async fn client(http: &reqwest::Client) -> Result<McpClient> {
     let mut store = config::load()?.ok_or_else(|| anyhow!("not logged in — run `plaud login`"))?;
     if store.is_expired(60) && store.refresh_token.is_some() {
-        store = oauth::refresh(http, &store)
-            .await
-            .context("refreshing access token")?;
+        // oauth::refresh already returns actionable errors (e.g. "session
+        // expired — run `plaud login`"); don't bury them under more context.
+        store = oauth::refresh(http, &store).await?;
         config::save(&store)?;
     }
     Ok(McpClient::new(http.clone(), store))
@@ -246,6 +246,7 @@ async fn sync(http: &reqwest::Client, args: SyncArgs) -> Result<()> {
 
     let mut synced = 0usize;
     let mut skipped = 0usize;
+    let mut failed: Vec<String> = Vec::new();
     for item in &candidates {
         if args.limit.is_some_and(|lim| synced >= lim) {
             break;
@@ -258,26 +259,58 @@ async fn sync(http: &reqwest::Client, args: SyncArgs) -> Result<()> {
             skipped += 1;
             continue;
         }
-        let file = mcp.call_tool("get_file", json!({ "file_id": id })).await?;
-        let record = model::build_record_from_file(&file, config::now_iso());
-        store::save_record(&record)?;
-        synced += 1;
-        println!("  + {} {}", record.date(), record.name);
+        // One bad recording must not abort the whole batch.
+        match fetch_and_store(&mut mcp, id).await {
+            Ok(record) => {
+                synced += 1;
+                println!("  + {} {}", record.date(), record.name);
+            }
+            Err(e) => {
+                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                eprintln!("  ! skipped {id} ({name}): {e:#}");
+                failed.push(id.to_string());
+            }
+        }
     }
 
     let total = store::load_all()?.len();
+    // Only advance the cursor on a clean run. Synced records are saved
+    // immediately and `has_record` skips them, so re-running after a failure is
+    // cheap and idempotent — but the cursor must not leapfrog a failed record.
+    let cursor_created = if failed.is_empty() {
+        max_created
+    } else {
+        cursor.last_created_at.clone()
+    };
     store::save_cursor(&store::Cursor {
-        last_created_at: max_created,
+        last_created_at: cursor_created,
         last_synced_at: Some(config::now_iso()),
         record_count: total,
     })?;
 
     let dir = store::store_dir()?;
     println!(
-        "Synced {synced} new, {skipped} already present. Store: {total} records at {}.",
+        "Synced {synced} new, {skipped} already present{}. Store: {total} records at {}.",
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(", {} failed (re-run to retry)", failed.len())
+        },
         dir.display()
     );
+    if !failed.is_empty() {
+        // Non-zero exit so scripts/cron can detect a partial sync.
+        bail!("{} recording(s) failed to sync", failed.len());
+    }
     Ok(())
+}
+
+/// Fetch one recording's full payload and persist it to the store.
+async fn fetch_and_store(mcp: &mut McpClient, id: &str) -> Result<Record> {
+    let file = mcp.call_tool("get_file", json!({ "file_id": id })).await?;
+    let record = model::build_record_from_file(&file, config::now_iso());
+    store::save_record(&record)?;
+    Ok(record)
 }
 
 // ---- search --------------------------------------------------------------
@@ -433,12 +466,20 @@ async fn export(http: &reqwest::Client, args: ExportArgs) -> Result<()> {
         bail!("nothing to export — run `plaud sync` or pass recording ids");
     }
 
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     for record in &records {
         let (ext, content) = match args.format {
             ExportFormat::Md => ("md", record.to_markdown()),
             ExportFormat::Json => ("json", serde_json::to_string_pretty(record)?),
         };
-        let path = args.dir.join(format!("{}.{ext}", record.file_stem()));
+        // Disambiguate same-date/same-title collisions so no record is lost.
+        let mut stem = record.file_stem();
+        if !used.insert(stem.clone()) {
+            let suffix: String = record.id.chars().take(8).collect();
+            stem = format!("{stem}-{suffix}");
+            used.insert(stem.clone());
+        }
+        let path = args.dir.join(format!("{stem}.{ext}"));
         fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
         println!("  wrote {}", path.display());
     }

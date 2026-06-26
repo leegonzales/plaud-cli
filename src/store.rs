@@ -101,3 +101,68 @@ pub fn save_cursor(cursor: &Cursor) -> Result<()> {
     fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Record;
+
+    fn record(id: &str) -> Record {
+        Record {
+            id: id.to_string(),
+            name: format!("Recording {id}"),
+            created_at: "2026-06-25T10:00:00".into(),
+            start_at: "2026-06-25T09:00:00".into(),
+            duration_ms: 1000,
+            serial_number: "SN".into(),
+            transcript: Vec::new(),
+            notes: Vec::new(),
+            action_items: Vec::new(),
+            synced_at: "2026-06-25T10:00:00Z".into(),
+        }
+    }
+
+    /// One serial round-trip test: it mutates the process-global `PLAUD_STORE`,
+    /// so it must be the only test that touches the store.
+    #[test]
+    fn store_round_trip() {
+        let dir = std::env::temp_dir().join(format!("plaud-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        // SAFETY: edition 2021, single test owns this env var.
+        std::env::set_var("PLAUD_STORE", &dir);
+
+        // Empty store.
+        assert!(load_all().unwrap().is_empty());
+        assert!(!has_record("a").unwrap());
+        assert!(load_record("a").unwrap().is_none());
+        assert!(load_cursor().unwrap().last_created_at.is_none());
+
+        // Save two records, newest-first ordering by start_at.
+        let mut older = record("old");
+        older.start_at = "2026-06-01T09:00:00".into();
+        save_record(&record("new")).unwrap();
+        save_record(&older).unwrap();
+
+        assert!(has_record("new").unwrap());
+        assert_eq!(load_record("new").unwrap().unwrap().id, "new");
+        let all = load_all().unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].id, "new", "newest start_at sorts first");
+        assert_eq!(all[1].id, "old");
+
+        // Cursor round-trip.
+        save_cursor(&Cursor {
+            last_created_at: Some("2026-06-25T10:00:00".into()),
+            last_synced_at: Some("2026-06-25T10:00:00Z".into()),
+            record_count: 2,
+        })
+        .unwrap();
+        let cur = load_cursor().unwrap();
+        assert_eq!(cur.last_created_at.as_deref(), Some("2026-06-25T10:00:00"));
+        assert_eq!(cur.record_count, 2);
+        // Cursor file is not mistaken for a record.
+        assert_eq!(load_all().unwrap().len(), 2);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

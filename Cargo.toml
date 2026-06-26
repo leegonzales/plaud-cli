@@ -2,7 +2,7 @@
 name = "plaud"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.82"
 description = "CLI client for Plaud recordings via the Plaud MCP server"
 authors = ["Lee Gonzales <lee@catalystai.services>"]
 license = "MIT"

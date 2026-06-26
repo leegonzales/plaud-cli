@@ -203,9 +203,14 @@ async fn sync(http: &reqwest::Client, args: SyncArgs) -> Result<()> {
         args.since.clone()
     };
 
-    // Enumerate candidate recordings across all pages.
+    // Enumerate candidate recordings across all pages. The threshold is an
+    // inclusive overlap window (`created < threshold` skips) rather than
+    // exclusive (`<=`): recordings sharing the cursor's exact timestamp are
+    // re-collected each run and de-duped by `has_record`, so a same-second
+    // upload split across two runs is never lost.
     let mut candidates: Vec<Value> = Vec::new();
     let mut page = 1u32;
+    let mut cap_hit = false;
     loop {
         let payload = mcp
             .call_tool(
@@ -221,13 +226,17 @@ async fn sync(http: &reqwest::Client, args: SyncArgs) -> Result<()> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if let Some(th) = &threshold {
-                if created <= th.as_str() {
+                if created < th.as_str() {
                     continue;
                 }
             }
             candidates.push((*item).clone());
         }
-        if count < SYNC_PAGE_SIZE as usize || page >= SYNC_PAGE_CAP {
+        if count < SYNC_PAGE_SIZE as usize {
+            break;
+        }
+        if page >= SYNC_PAGE_CAP {
+            cap_hit = true; // more pages exist but we stopped — do not advance cursor
             break;
         }
         page += 1;
@@ -247,8 +256,12 @@ async fn sync(http: &reqwest::Client, args: SyncArgs) -> Result<()> {
     let mut synced = 0usize;
     let mut skipped = 0usize;
     let mut failed: Vec<String> = Vec::new();
+    let mut truncated = false;
     for item in &candidates {
         if args.limit.is_some_and(|lim| synced >= lim) {
+            // More candidates remain below the global max created_at. Advancing
+            // the cursor would skip them on the next --since-last run.
+            truncated = true;
             break;
         }
         let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -274,14 +287,22 @@ async fn sync(http: &reqwest::Client, args: SyncArgs) -> Result<()> {
     }
 
     let total = store::load_all()?.len();
-    // Only advance the cursor on a clean run. Synced records are saved
-    // immediately and `has_record` skips them, so re-running after a failure is
-    // cheap and idempotent — but the cursor must not leapfrog a failed record.
-    let cursor_created = if failed.is_empty() {
+    // Only advance the cursor on a complete, clean run. Synced records are saved
+    // immediately and `has_record` skips them, so re-running is cheap and
+    // idempotent — but the cursor must never leapfrog a record we didn't handle
+    // (a failure, or a candidate left behind by --limit), or --since-last would
+    // skip it forever.
+    let cursor_created = if failed.is_empty() && !truncated && !cap_hit {
         max_created
     } else {
         cursor.last_created_at.clone()
     };
+    if cap_hit {
+        eprintln!(
+            "  ! reached page cap ({} pages); older recordings not listed — cursor held",
+            SYNC_PAGE_CAP
+        );
+    }
     store::save_cursor(&store::Cursor {
         last_created_at: cursor_created,
         last_synced_at: Some(config::now_iso()),
@@ -344,7 +365,10 @@ fn search(args: SearchArgs, mode: OutputMode) -> Result<()> {
         for (i, seg) in record.transcript.iter().enumerate() {
             if seg.text.to_lowercase().contains(&needle) {
                 let lo = i.saturating_sub(args.context);
-                let hi = (i + args.context + 1).min(record.transcript.len());
+                let hi = i
+                    .saturating_add(args.context)
+                    .saturating_add(1)
+                    .min(record.transcript.len());
                 let context: Vec<Value> = record.transcript[lo..hi]
                     .iter()
                     .map(|s| {

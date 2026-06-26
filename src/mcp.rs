@@ -38,14 +38,26 @@ impl McpClient {
     }
 
     /// POST a JSON-RPC payload, refreshing the token once on 401.
+    ///
+    /// The server may bind the session to the old access token, so after a
+    /// refresh we drop the session and re-run the handshake before replaying —
+    /// except when the body *is* the initialize request, which would recurse.
     async fn post(&mut self, body: &Value) -> Result<reqwest::Response> {
         let resp = self.post_once(body).await?;
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            // Access token likely expired — refresh, persist, retry once.
             // refresh() already returns actionable errors; don't re-wrap.
             let refreshed = oauth::refresh(&self.http, &self.store).await?;
             config::save(&refreshed)?;
             self.store = refreshed;
+
+            let is_initialize = body.get("method").and_then(|m| m.as_str()) == Some("initialize");
+            if !is_initialize {
+                // Re-establish a session under the new token before replaying.
+                // Boxed: post -> ensure_initialized -> post is a recursion cycle.
+                self.session_id = None;
+                self.initialized = false;
+                Box::pin(self.ensure_initialized()).await?;
+            }
             let retry = self.post_once(body).await?;
             return Ok(retry);
         }
@@ -94,11 +106,13 @@ impl McpClient {
         {
             self.session_id = Some(sid.to_string());
         }
-        let _ = parse_jsonrpc(resp).await?; // surface init errors
+        let _ = parse_jsonrpc(resp, id).await?; // surface init errors
 
-        // Acknowledge initialization (notification — no response body).
+        // Acknowledge initialization (best-effort notification, no response).
+        // Sent via post_once — the token was just validated, and routing it
+        // through post() could re-enter the 401 refresh/re-init path.
         let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        let _ = self.post(&note).await?;
+        let _ = self.post_once(&note).await?;
 
         self.initialized = true;
         Ok(())
@@ -120,7 +134,7 @@ impl McpClient {
             let text = resp.text().await.unwrap_or_default();
             bail!("tool `{name}` failed (HTTP {status}): {text}");
         }
-        let rpc = parse_jsonrpc(resp).await?;
+        let rpc = parse_jsonrpc(resp, id).await?;
         let result = rpc
             .get("result")
             .cloned()
@@ -129,9 +143,10 @@ impl McpClient {
     }
 }
 
-/// Read a JSON-RPC response from either a JSON body or an SSE stream, and
-/// surface any protocol-level `error`.
-async fn parse_jsonrpc(resp: reqwest::Response) -> Result<Value> {
+/// Read the JSON-RPC response matching `expected_id` from either a JSON body or
+/// an SSE stream, ignoring any interleaved notifications, and surface any
+/// protocol-level `error`.
+async fn parse_jsonrpc(resp: reqwest::Response, expected_id: i64) -> Result<Value> {
     let content_type = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -140,14 +155,25 @@ async fn parse_jsonrpc(resp: reqwest::Response) -> Result<Value> {
         .to_string();
     let text = resp.text().await.context("reading MCP response body")?;
 
-    let message = if content_type.contains("text/event-stream") {
-        parse_sse(&text).ok_or_else(|| anyhow!("no JSON-RPC message in SSE stream"))?
+    let messages = if content_type.contains("text/event-stream") {
+        parse_sse(&text)
     } else if text.trim().is_empty() {
         // e.g. 202 Accepted for a notification.
         return Ok(Value::Null);
     } else {
-        serde_json::from_str(&text).with_context(|| format!("parsing JSON-RPC body: {text}"))?
+        let v: Value = serde_json::from_str(&text)
+            .with_context(|| format!("parsing JSON-RPC body: {text}"))?;
+        // A non-SSE body is a single message or a JSON-RPC batch array.
+        match v {
+            Value::Array(items) => items,
+            other => vec![other],
+        }
     };
+
+    // Select the response whose id matches our request; notifications carry no
+    // matching id and are skipped.
+    let message = select_response(messages, expected_id)
+        .ok_or_else(|| anyhow!("no JSON-RPC response matching request id {expected_id}"))?;
 
     if let Some(err) = message.get("error") {
         let msg = err
@@ -159,30 +185,37 @@ async fn parse_jsonrpc(resp: reqwest::Response) -> Result<Value> {
     Ok(message)
 }
 
-/// Pull the first JSON-RPC object out of an SSE stream's `data:` lines.
-fn parse_sse(text: &str) -> Option<Value> {
+/// Pick the JSON-RPC message whose `id` matches the request, skipping
+/// notifications (which have no matching id).
+fn select_response(messages: Vec<Value>, expected_id: i64) -> Option<Value> {
+    let want = json!(expected_id);
+    messages.into_iter().find(|m| m.get("id") == Some(&want))
+}
+
+/// Collect every JSON-RPC object from an SSE stream's `data:` lines.
+fn parse_sse(text: &str) -> Vec<Value> {
+    let mut out = Vec::new();
     let mut data = String::new();
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("data:") {
-            data.push_str(rest.trim_start());
-            data.push('\n');
-        } else if line.trim().is_empty() && !data.is_empty() {
+    let flush = |data: &mut String, out: &mut Vec<Value>| {
+        if !data.is_empty() {
             if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
                 if v.get("jsonrpc").is_some() {
-                    return Some(v);
+                    out.push(v);
                 }
             }
             data.clear();
         }
-    }
-    if !data.is_empty() {
-        if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
-            if v.get("jsonrpc").is_some() {
-                return Some(v);
-            }
+    };
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("data:") {
+            data.push_str(rest.trim_start());
+            data.push('\n');
+        } else if line.trim().is_empty() {
+            flush(&mut data, &mut out);
         }
     }
-    None
+    flush(&mut data, &mut out);
+    out
 }
 
 /// Turn a `tools/call` result into usable JSON: prefer `structuredContent`,
@@ -228,5 +261,49 @@ fn collect_text(result: &Value) -> Option<String> {
         None
     } else {
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sse_collects_all_events() {
+        let stream = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n\
+                      event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}\n\n";
+        let msgs = parse_sse(stream);
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn select_response_skips_notifications_and_matches_id() {
+        let msgs = parse_sse(
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n\
+             data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}\n\n",
+        );
+        let picked = select_response(msgs, 7).unwrap();
+        assert_eq!(picked.get("result").unwrap(), &json!({ "ok": true }));
+    }
+
+    #[test]
+    fn select_response_none_when_id_absent() {
+        let msgs = vec![json!({ "jsonrpc": "2.0", "id": 1, "result": {} })];
+        assert!(select_response(msgs, 99).is_none());
+    }
+
+    #[test]
+    fn extract_tool_payload_parses_text_json() {
+        let result = json!({ "content": [{ "type": "text", "text": "{\"a\":1}" }] });
+        assert_eq!(
+            extract_tool_payload("t", result).unwrap(),
+            json!({ "a": 1 })
+        );
+    }
+
+    #[test]
+    fn extract_tool_payload_surfaces_is_error() {
+        let result = json!({ "isError": true, "content": [{ "type": "text", "text": "boom" }] });
+        assert!(extract_tool_payload("t", result).is_err());
     }
 }

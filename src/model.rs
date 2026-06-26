@@ -67,13 +67,16 @@ impl Record {
     pub fn to_markdown(&self) -> String {
         let mut out = String::new();
         out.push_str("---\n");
-        out.push_str(&format!("id: \"{}\"\n", self.id));
+        out.push_str(&format!("id: {}\n", yaml_scalar(&self.id)));
         out.push_str(&format!("title: {}\n", yaml_scalar(&self.name)));
-        out.push_str(&format!("date: \"{}\"\n", self.date()));
-        out.push_str(&format!("start_at: \"{}\"\n", self.start_at));
-        out.push_str(&format!("created_at: \"{}\"\n", self.created_at));
+        out.push_str(&format!("date: {}\n", yaml_scalar(self.date())));
+        out.push_str(&format!("start_at: {}\n", yaml_scalar(&self.start_at)));
+        out.push_str(&format!("created_at: {}\n", yaml_scalar(&self.created_at)));
         out.push_str(&format!("duration_ms: {}\n", self.duration_ms));
-        out.push_str(&format!("serial_number: \"{}\"\n", self.serial_number));
+        out.push_str(&format!(
+            "serial_number: {}\n",
+            yaml_scalar(&self.serial_number)
+        ));
         out.push_str("source: plaud\n");
         out.push_str("tags: [meeting, transcript]\n");
         out.push_str("---\n\n");
@@ -113,16 +116,25 @@ impl Record {
     }
 }
 
-/// Quote a YAML scalar if it contains characters that would break a bare value.
+/// Render a string as a safe double-quoted YAML scalar: escape backslashes,
+/// quotes, and control characters (newlines/tabs) so free-text titles can never
+/// break the frontmatter.
 fn yaml_scalar(s: &str) -> String {
-    if s.is_empty()
-        || s.contains([':', '"', '#', '\n', '\''])
-        || s.starts_with(['[', '{', '-', '@'])
-    {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s.to_string()
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
     }
+    out.push('"');
+    out
 }
 
 /// `mm:ss` / `h:mm:ss` from milliseconds.
@@ -219,23 +231,26 @@ pub fn extract_action_items(notes: &[Note]) -> Vec<String> {
         let mut in_section = false;
         for raw in note.markdown.lines() {
             let line = raw.trim();
-            let heading = line.trim_start_matches('#').trim();
-            let is_heading = line.starts_with('#') || (!line.is_empty() && !is_bullet(line));
+            let is_markdown_heading = line.starts_with('#');
+            let heading_text = line.trim_start_matches('#').trim();
 
-            if is_action_heading(heading) || is_action_heading(line) {
+            // A heading either opens the action-items section or, if it's a
+            // different heading, closes it. Only real Markdown headings (or the
+            // bare "Action Items"/"Next Steps" label) delimit the section —
+            // prose or wrapped bullet lines must not end it early.
+            if is_action_heading(heading_text) || (!in_section && is_action_heading(line)) {
                 in_section = true;
                 continue;
             }
-            if !in_section {
+            if is_markdown_heading {
+                in_section = false;
                 continue;
             }
-            if is_bullet(line) {
+            if in_section && is_bullet(line) {
                 let text = strip_bullet(line);
                 if !text.is_empty() && !items.contains(&text) {
                     items.push(text);
                 }
-            } else if is_heading && !line.is_empty() {
-                in_section = false; // next section
             }
         }
     }
@@ -466,12 +481,29 @@ mod tests {
     }
 
     #[test]
-    fn yaml_scalar_quotes_when_needed() {
-        assert_eq!(yaml_scalar("plain"), "plain");
+    fn yaml_scalar_always_quotes_and_escapes() {
+        assert_eq!(yaml_scalar("plain"), "\"plain\"");
         assert_eq!(yaml_scalar("has: colon"), "\"has: colon\"");
-        assert_eq!(yaml_scalar("- leading dash"), "\"- leading dash\"");
         assert_eq!(yaml_scalar("say \"hi\""), "\"say \\\"hi\\\"\"");
+        // Backslashes and control chars are escaped so a title can't break YAML.
+        assert_eq!(yaml_scalar("path\\to"), "\"path\\\\to\"");
+        assert_eq!(yaml_scalar("line1\nline2"), "\"line1\\nline2\"");
         assert_eq!(yaml_scalar(""), "\"\"");
+    }
+
+    #[test]
+    fn action_items_survive_prose_between_bullets() {
+        // A non-heading prose line must not terminate the section early.
+        let notes = vec![Note {
+            tab: "x".into(),
+            title: "x".into(),
+            note_type: "x".into(),
+            markdown:
+                "## Action Items\n- First\nsome wrapped prose here\n- Second\n## End\n- ignored"
+                    .into(),
+        }];
+        let items = extract_action_items(&notes);
+        assert_eq!(items, vec!["First", "Second"]);
     }
 
     #[test]

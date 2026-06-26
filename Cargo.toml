@@ -2,9 +2,15 @@
 name = "plaud"
 version = "0.3.0"
 edition = "2021"
+rust-version = "1.74"
 description = "CLI client for Plaud recordings via the Plaud MCP server"
+authors = ["Lee Gonzales <lee@catalystai.services>"]
 license = "MIT"
 repository = "https://github.com/leegonzales/plaud-cli"
+readme = "README.md"
+keywords = ["plaud", "mcp", "transcription", "cli", "oauth"]
+categories = ["command-line-utilities"]
+exclude = [".github/", "CHANGELOG.md"]
 
 [[bin]]
 name = "plaud"

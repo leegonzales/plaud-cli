@@ -102,7 +102,17 @@ reports that clearly. `transcript` and `note` decode Plaud's nested
 `data_content` blocks — the verbatim transcript and the AI summary / meeting
 minutes — and fall back to raw JSON for any block shape they don't recognize.
 
-## Layout
+## Development
+
+```sh
+cargo test                                  # unit tests
+cargo fmt --all -- --check                  # formatting
+cargo clippy --all-targets -- -D warnings   # lints (zero-warning bar)
+cargo build --release
+```
+
+CI runs all of the above on every push and PR. The codebase is small and
+organized one concern per module:
 
 - `oauth.rs` — discovery, DCR, PKCE, loopback redirect, token + refresh
 - `mcp.rs` — Streamable-HTTP MCP client (initialize, session id, `tools/call`)
@@ -112,4 +122,18 @@ minutes — and fall back to raw JSON for any block shape they don't recognize.
 - `output.rs` — human-readable rendering (table, transcript, notes)
 - `config.rs` — token storage
 
-Unofficial; not affiliated with Plaud.
+Contributions welcome — please keep `cargo fmt`/`clippy`/`test` green.
+
+## Disclaimer
+
+This is an **unofficial** project, not affiliated with, endorsed by, or
+supported by Plaud. It talks to the same MCP endpoint Plaud documents for AI
+assistants (`https://mcp.plaud.ai/mcp`), using your own account via the
+standard OAuth flow — it stores no credentials beyond the tokens that flow
+returns, kept locally at `~/.plaud/cli-tokens.json` (mode `0600`). Use it with
+your own recordings and at your own risk. Endpoint or payload changes on
+Plaud's side may break it.
+
+## License
+
+[MIT](LICENSE) © Lee Gonzales

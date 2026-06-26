@@ -1,5 +1,7 @@
 # plaud
 
+[![CI](https://github.com/leegonzales/plaud-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/leegonzales/plaud-cli/actions/workflows/ci.yml)
+
 A small Rust CLI for your [Plaud](https://www.plaud.ai/) recordings. It's a
 thin [Model Context Protocol](https://modelcontextprotocol.io) client over the
 official Plaud MCP server (`https://mcp.plaud.ai/mcp`) — the same capabilities

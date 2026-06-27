@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS is the supported platform (Apple Silicon + Intel).
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          tar -C target/${{ matrix.target }}/release -czf \
+            plaud-${{ matrix.target }}.tar.gz plaud
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: plaud-${{ matrix.target }}.tar.gz
+          fail_on_unmatched_files: true

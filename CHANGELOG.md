@@ -4,6 +4,25 @@ All notable changes to `plaud` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.1] — 2026-06-27
+
+Easy install and a world-class README.
+
+### Added
+- **One-line installer** (`install.sh`): `curl -fsSL …/install.sh | sh` downloads
+  the prebuilt macOS binary from the latest release, with a `cargo` from-source
+  fallback. Honors `PLAUD_INSTALL_DIR`.
+- **Release CI** builds and attaches macOS binaries (Apple Silicon + Intel) on
+  every tag.
+- README rewrite: requirements, tiered install (`curl | sh`, `cargo install
+  --git`, `cargo-binstall`, source), quick start, configuration table, and a
+  troubleshooting section.
+
+### Notes
+- **macOS is the supported platform.** The code is portable Rust and may build
+  on Linux from source, but Linux is untested/unsupported; Windows is not
+  supported.
+
 ## [0.3.0] — 2026-06-25
 
 First GA-quality release: tested, hardened, and CI-gated.

@@ -16,11 +16,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS is the supported platform (Apple Silicon + Intel).
           - os: macos-14
             target: aarch64-apple-darwin
           - os: macos-13
             target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -32,13 +33,21 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
         run: |
           tar -C target/${{ matrix.target }}/release -czf \
             plaud-${{ matrix.target }}.tar.gz plaud
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/plaud.exe `
+            -DestinationPath plaud-${{ matrix.target }}.zip
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: plaud-${{ matrix.target }}.tar.gz
+          files: plaud-${{ matrix.target }}.*
           fail_on_unmatched_files: true

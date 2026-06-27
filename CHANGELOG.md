@@ -4,6 +4,24 @@ All notable changes to `plaud` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.2] — 2026-06-27
+
+Windows support.
+
+### Added
+- **Windows x64 binaries**, built on a native Windows runner and attached to
+  each release (`ring`/rustls can't cross-compile from macOS, so Windows builds
+  natively in CI).
+- **`install.ps1`** — PowerShell installer (`irm …/install.ps1 | iex`) with the
+  same prebuilt-then-cargo-fallback behavior as the macOS installer.
+- CI now builds and tests on `windows-latest` every push, gating Windows
+  regressions.
+
+### Notes
+- Token-file permission hardening (`chmod 0600`/`0700`) remains macOS-only; on
+  Windows the tokens live in the user profile (`%USERPROFILE%\.plaud`).
+- Linux still builds and tests in CI but is not a release target.
+
 ## [0.3.1] — 2026-06-27
 
 Easy install and a world-class README.

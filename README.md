@@ -1,7 +1,7 @@
 # plaud
 
 [![CI](https://github.com/leegonzales/plaud-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/leegonzales/plaud-cli/actions/workflows/ci.yml)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
+[![Platform: macOS | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#requirements)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Your [Plaud](https://www.plaud.ai/) voice recordings, from the terminal.
@@ -27,28 +27,45 @@ $ plaud export --dir ~/notes/meetings --format md
 
 ## Requirements
 
-- **macOS only** (Apple Silicon or Intel). Prebuilt binaries and the install
-  script support macOS exclusively.
+- **macOS** (Apple Silicon or Intel) or **Windows** (x64). Prebuilt binaries
+  are published for both.
 - A **Plaud account** with recordings (you sign in through your browser).
 - For the from-source path only: a **Rust toolchain** (≥ 1.82).
 
-> **Other platforms:** the code is portable Rust and will likely build and run
-> on Linux from source (`cargo install --git …`), but Linux is **untested and
-> unsupported**. Windows is not supported.
+> **Platform notes:**
+> - Token-file permission hardening (`chmod 0600`/`0700`) is applied on macOS.
+>   On Windows the tokens live in your user profile (`%USERPROFILE%\.plaud`),
+>   which is user-scoped by default but not explicitly locked down.
+> - **Linux** builds and passes tests in CI and will run from source
+>   (`cargo install --git …`), but isn't a release target and is
+>   community-supported.
 
 ## Install
 
 ### Quick install (recommended)
 
+**macOS:**
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/leegonzales/plaud-cli/main/install.sh | sh
 ```
 
-This downloads the prebuilt binary for your Mac from the
+Downloads the prebuilt binary for your Mac from the
 [latest release](https://github.com/leegonzales/plaud-cli/releases/latest),
 installs it to `~/.local/bin`, and prints PATH guidance. Override the location
-with `PLAUD_INSTALL_DIR=/usr/local/bin`. If no prebuilt binary matches, it falls
-back to building from source with `cargo`.
+with `PLAUD_INSTALL_DIR=/usr/local/bin`.
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/leegonzales/plaud-cli/main/install.ps1 | iex
+```
+
+Downloads the prebuilt Windows binary and installs it to
+`%LOCALAPPDATA%\Programs\plaud`. Override with `$env:PLAUD_INSTALL_DIR`.
+
+Both installers fall back to building from source with `cargo` if no prebuilt
+binary matches.
 
 ### With cargo
 
@@ -149,7 +166,7 @@ payload. Commands exit non-zero on failure, so they compose safely in scripts.
 
 | What | Where | Notes |
 |------|-------|-------|
-| Tokens | `~/.plaud/cli-tokens.json` | Mode `0600`; written atomically. Removed by `plaud logout`. |
+| Tokens | `~/.plaud/cli-tokens.json` | Written atomically (mode `0600` on macOS). Removed by `plaud logout`. |
 | Sync store | `~/.plaud/store/` | Override with `PLAUD_STORE`. One JSON per recording + a sync cursor. |
 | Install dir | `~/.local/bin` | Override the installer with `PLAUD_INSTALL_DIR`. |
 
@@ -162,9 +179,10 @@ payload. Commands exit non-zero on failure, so they compose safely in scripts.
 3. Open the browser to authorize; a localhost loopback catches the redirect.
 4. Exchange the code (PKCE `S256`) for access + refresh tokens.
 
-Tokens are cached at `~/.plaud/cli-tokens.json` (mode `0600`) and refreshed
-automatically on a `401`. This file is separate from the official client's
-`~/.plaud/tokens-mcp.json`, so the two never collide. `logout` deletes it.
+Tokens are cached at `~/.plaud/cli-tokens.json` (mode `0600` on macOS; user
+profile on Windows) and refreshed automatically on a `401`. This file is
+separate from the official client's `~/.plaud/tokens-mcp.json`, so the two never
+collide. `logout` deletes it.
 
 ## Tools mapped
 
